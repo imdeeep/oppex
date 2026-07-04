@@ -26,13 +26,51 @@ applications:
           headers:
             - key: Cache-Control
               value: public, max-age=0, must-revalidate
-    redirects:
-      - source: /auth/<*>
-        target: http://3.85.101.177:3000/auth/<*>
-        status: "200"
-      - source: /health
-        target: http://3.85.101.177:3000/health
-        status: "200"
-      - source: /<*>
-        target: /index.html
-        status: "404-200"
+      # Proxy API traffic to EC2 BFF. Explicit rules (with/without trailing slash)
+      # must come BEFORE the SPA fallback or Amplify returns index.html for /auth/*.
+      redirects:
+        - source: /auth/signup
+          target: http://3.85.101.177:3000/auth/signup
+          status: "200"
+        - source: /auth/signup/
+          target: http://3.85.101.177:3000/auth/signup
+          status: "200"
+        - source: /auth/login
+          target: http://3.85.101.177:3000/auth/login
+          status: "200"
+        - source: /auth/login/
+          target: http://3.85.101.177:3000/auth/login
+          status: "200"
+        - source: /auth/logout
+          target: http://3.85.101.177:3000/auth/logout
+          status: "200"
+        - source: /auth/logout/
+          target: http://3.85.101.177:3000/auth/logout
+          status: "200"
+        - source: /auth/verify
+          target: http://3.85.101.177:3000/auth/verify
+          status: "200"
+        - source: /auth/verify/
+          target: http://3.85.101.177:3000/auth/verify
+          status: "200"
+        - source: /auth/resend-code
+          target: http://3.85.101.177:3000/auth/resend-code
+          status: "200"
+        - source: /auth/resend-code/
+          target: http://3.85.101.177:3000/auth/resend-code
+          status: "200"
+        - source: /auth/me
+          target: http://3.85.101.177:3000/auth/me
+          status: "200"
+        - source: /auth/me/
+          target: http://3.85.101.177:3000/auth/me
+          status: "200"
+        - source: /health
+          target: http://3.85.101.177:3000/health
+          status: "200"
+        - source: /health/
+          target: http://3.85.101.177:3000/health
+          status: "200"
+        - source: /<*>
+          target: /index.html
+          status: "404-200"

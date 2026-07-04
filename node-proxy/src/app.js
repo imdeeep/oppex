@@ -7,6 +7,15 @@ const authRoutes = require('./routes/authRoutes');
 function createApp() {
   const app = express();
 
+  // Normalize /auth/login/ → /auth/login (Amplify may append trailing slashes).
+  app.use((req, _res, next) => {
+    if (req.path.length > 1 && req.path.endsWith('/')) {
+      const query = req.url.slice(req.path.length);
+      req.url = req.path.slice(0, -1) + query;
+    }
+    next();
+  });
+
   app.use(
     cors({
       origin(origin, callback) {
