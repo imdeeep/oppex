@@ -1,17 +1,14 @@
-# ─── Build 
-FROM eclipse-temurin:17-jdk AS build
+# Build stage
+FROM maven:3.9.11-eclipse-temurin-17 AS build
 
 WORKDIR /app
 
-COPY mvnw .
-COPY .mvn .mvn
 COPY pom.xml .
-RUN chmod +x mvnw && ./mvnw dependency:go-offline -B
-
 COPY src ./src
-RUN ./mvnw package -DskipTests -B
 
-# ─── Run 
+RUN mvn package -DskipTests
+
+# Runtime stage
 FROM eclipse-temurin:17-jre
 
 WORKDIR /app
