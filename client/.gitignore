@@ -1,0 +1,10 @@
+# Secrets
+.env
+**/.env
+
+# OS
+.DS_Store
+
+node_modules/
+build/
+.react-router/
