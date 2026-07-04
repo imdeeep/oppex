@@ -1,0 +1,33 @@
+version: 1
+applications:
+  - appRoot: client
+    frontend:
+      phases:
+        preBuild:
+          commands:
+            - npm ci
+        build:
+          commands:
+            - npm run build
+      artifacts:
+        baseDirectory: build/client
+        files:
+          - "**/*"
+      cache:
+        paths:
+          - node_modules/**/*
+      customHeaders:
+        - pattern: "**/*"
+          headers:
+            - key: Cache-Control
+              value: public, max-age=0, must-revalidate
+    redirects:
+      - source: /auth/<*>
+        target: http://3.85.101.177:3000/auth/<*>
+        status: "200"
+      - source: /health
+        target: http://3.85.101.177:3000/health
+        status: "200"
+      - source: /<*>
+        target: /index.html
+        status: "404-200"
