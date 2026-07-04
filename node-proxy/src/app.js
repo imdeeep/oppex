@@ -7,6 +7,10 @@ const authRoutes = require('./routes/authRoutes');
 function createApp() {
   const app = express();
 
+  // Behind a TLS-terminating reverse proxy (Caddy/Nginx). Lets express-session
+  // trust X-Forwarded-Proto so Secure cookies are set over the HTTPS chain.
+  app.set('trust proxy', 1);
+
   // Normalize /auth/login/ → /auth/login (Amplify may append trailing slashes).
   app.use((req, _res, next) => {
     if (req.path.length > 1 && req.path.endsWith('/')) {
