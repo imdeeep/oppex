@@ -9,14 +9,15 @@ The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwar
 ## Live deployment
 
 
-| Service               | URL                                          |
-| --------------------- | -------------------------------------------- |
-| **Portal (frontend)** | `https://main.d1wk531jtem0zo.amplifyapp.com` |
-| **BFF API (backend)** | `https://oppex.duckdns.org`                  |
-| **GitHub**            | `https://github.com/imdeeep/oppex`           |
+| Service                    | URL                                |
+| -------------------------- | ---------------------------------- |
+| **Portal (single origin)** | `https://oppex.duckdns.org`        |
+| **GitHub**                 | `https://github.com/imdeeep/oppex` |
 
-
-Replace the URLs above with your own if you redeploy.
+Frontend and backend are served from **one origin** (`oppex.duckdns.org`) via Caddy on EC2.
+This keeps the session cookie first-party so login works in every browser. A split setup
+(Amplify frontend + separate-domain API) fails in Safari, which blocks cross-site cookies.
+See [Deployment](#deployment-aws).
 
 ---
 

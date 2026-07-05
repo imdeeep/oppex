@@ -1,0 +1,25 @@
+# Single-origin production setup on EC2.
+# Serves the React build AND proxies API traffic under one domain so the
+# session cookie is first-party (works in Safari/Chrome without third-party
+# cookie issues). Place the built frontend at /var/www/oppex.
+#
+# Deploy:
+#   sudo cp Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl restart caddy
+
+oppex.duckdns.org {
+    # API + session routes → Node BFF
+    handle /auth/* {
+        reverse_proxy localhost:3000
+    }
+    handle /health {
+        reverse_proxy localhost:3000
+    }
+
+    # Everything else → React SPA (client-side routing fallback)
+    handle {
+        root * /var/www/oppex
+        try_files {path} /index.html
+        file_server
+    }
+}
