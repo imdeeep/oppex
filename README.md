@@ -59,7 +59,7 @@ See [Deployment](#deployment-aws).
 | Backend + frontend tests                  | JUnit, Vitest, Node test runner                             |
 | Quarkus services + Node session layer     | BFF pattern as specified                                    |
 | Tech stack                                | Quarkus + PostgreSQL + React + Node + Maven                 |
-| AWS deployment                            | Amplify (frontend) + EC2 Docker (BFF + Quarkus) + Neon (DB) |
+| AWS deployment                            | EC2 Docker Compose (Caddy + frontend + BFF + Quarkus) + Neon (DB) |
 
 
 ---
@@ -68,7 +68,9 @@ See [Deployment](#deployment-aws).
 
 ## System architecture
 
-Oppex system architecture diagram
+<p align="center">
+  <img src="./sysarch.png" alt="Oppex system architecture diagram" width="900" />
+</p>
 
 > **Note:** The diagram shows port `4000` for the BFF and a separate verification-tokens table. This implementation uses port **3000** for the BFF and stores OTP fields on the `users` table.
 
@@ -111,40 +113,44 @@ Quarkus  →  SMTP  →  User inbox (6-digit OTP)
 
 ## Production architecture
 
+Everything is served from **one origin** (`https://oppex.duckdns.org`) and runs as a
+single Docker Compose stack on one EC2 instance. Caddy terminates TLS and routes
+traffic to the frontend or the BFF.
+
 ```
-User browser
-    │
-    ├─► AWS Amplify          https://main.xxxxx.amplifyapp.com   (React SPA)
-    │
-    └─► DuckDNS + Caddy + EC2  https://oppex.duckdns.org          (Node BFF :3000)
-              │
-              └─► Docker: Quarkus :8080 (internal only)
-                        │
-                        ├─► Neon PostgreSQL (external)
-                        └─► Gmail SMTP
+Browser  →  https://oppex.duckdns.org  (Caddy container :443, auto HTTPS)
+                 │
+                 ├─ /auth/*, /health ─►  node-proxy:3000  ─►  server:8080  ─►  Neon PostgreSQL
+                 │                                                          └►  Gmail SMTP
+                 └─ everything else  ─►  frontend:80 (nginx + React build)
 ```
 
 
-| Component     | Where              | Notes                                      |
-| ------------- | ------------------ | ------------------------------------------ |
-| Frontend      | **AWS Amplify**    | Monorepo, app root = `client/`             |
-| BFF + Quarkus | **AWS EC2**        | Docker Compose (`docker-compose.yml`)      |
-| HTTPS for API | **Caddy** on EC2   | Auto Let's Encrypt cert for DuckDNS domain |
-| Database      | **Neon**           | PostgreSQL, external - not on EC2          |
-| DNS           | **DuckDNS** (free) | Points subdomain to EC2 public IP          |
+| Component | Where | Notes |
+| --------- | ----- | ----- |
+| Reverse proxy / TLS | **Caddy** container | Auto Let's Encrypt cert for DuckDNS domain |
+| Frontend | **nginx** container | Serves the built React SPA |
+| BFF | **node-proxy** container | Sessions, cookies, proxy to Quarkus |
+| Backend | **server** container | Quarkus, internal only |
+| Database | **Neon** | PostgreSQL, external |
+| DNS | **DuckDNS** (free) | Points `oppex.duckdns.org` to EC2 IP |
 
 
 
 
-### Why cross-origin + HTTPS in production
+### Why single origin
 
-Locally, frontend and BFF share `localhost` - cookies work with `SameSite=Lax`.
+Locally, frontend and BFF share `localhost`, so cookies just work.
 
-In production, Amplify (`amplifyapp.com`) and the BFF (`duckdns.org`) are **different sites**. The fix:
+A split setup (frontend on `amplifyapp.com`, API on `duckdns.org`) makes the session
+cookie **third-party**. Safari (and increasingly Chrome) **block third-party cookies**,
+so login succeeds but `/auth/me` returns 401.
 
-1. **HTTPS** on the BFF via Caddy (Amplify requires HTTPS targets; plain `http://IP:3000` is rejected).
-2. `VITE_API_URL=https://oppex.duckdns.org` in Amplify - browser calls BFF directly.
-3. `SameSite=None; Secure` cookies in production + `trust proxy` in Express (behind Caddy).
+Serving both from `oppex.duckdns.org` makes the cookie **first-party**, which works in
+every browser — no CORS, no `SameSite=None` fragility. Caddy handles HTTPS + routing.
+
+> An earlier version used AWS Amplify for the frontend. It was dropped because of the
+> third-party-cookie problem above. `amplify.yml` remains in the repo for reference only.
 
 ---
 
@@ -155,10 +161,15 @@ In production, Amplify (`amplifyapp.com`) and the BFF (`duckdns.org`) are **diff
 ```
 oppex/
 ├── client/                 # React frontend (React Router 8 + Vite + Tailwind)
+│   ├── Dockerfile          # Build SPA → serve with nginx
+│   └── nginx.conf          # SPA routing fallback
 ├── node-proxy/             # Node.js BFF (Express + express-session)
+│   └── Dockerfile
 ├── server/                 # Quarkus backend (Maven)
-├── docker-compose.yml      # EC2: server + node-proxy containers
-├── amplify.yml             # Amplify build spec (monorepo, appRoot: client)
+│   └── Dockerfile
+├── docker-compose.yml      # Full stack: caddy + frontend + node-proxy + server
+├── Caddyfile               # TLS + routing (single origin)
+├── amplify.yml             # Legacy Amplify build spec (unused, kept for reference)
 ├── sysarch.png             # Architecture diagram (referenced above)
 ├── docs/context.md         # Extended architecture notes
 └── README.md
@@ -178,7 +189,7 @@ oppex/
 | Backend    | Quarkus 3.37, Java 17, Hibernate ORM, Panache              |
 | Database   | PostgreSQL (Neon)                                          |
 | Email      | Quarkus Mailer + Gmail SMTP                                |
-| Deployment | AWS Amplify, EC2, Docker, Caddy, DuckDNS                   |
+| Deployment | AWS EC2, Docker Compose, Caddy, nginx, DuckDNS             |
 | Tests      | JUnit 5, Vitest, Node `--test`                             |
 
 
@@ -229,13 +240,13 @@ Copy from each folder's `.env.example`. **Never commit** `.env` **files** (they 
 ### BFF - `node-proxy/.env`
 
 
-| Variable         | Local                   | Production (EC2)                    |
-| ---------------- | ----------------------- | ----------------------------------- |
-| `PORT`           | `3000`                  | `3000`                              |
-| `QUARKUS_URL`    | `http://localhost:8080` | `http://server:8080`                |
-| `SESSION_SECRET` | any dev string          | long random string (32+ chars)      |
-| `CLIENT_URL`     | `http://localhost:5173` | `https://main.xxxxx.amplifyapp.com` |
-| `NODE_ENV`       | `development`           | `production`                        |
+| Variable         | Local                   | Production (EC2)               |
+| ---------------- | ----------------------- | ----------------------------- |
+| `PORT`           | `3000`                  | `3000`                        |
+| `QUARKUS_URL`    | `http://localhost:8080` | `http://server:8080`         |
+| `SESSION_SECRET` | any dev string          | long random string (32+ chars) |
+| `CLIENT_URL`     | `http://localhost:5173` | `https://oppex.duckdns.org`  |
+| `NODE_ENV`       | `development`           | `production`                  |
 
 
 
@@ -243,12 +254,14 @@ Copy from each folder's `.env.example`. **Never commit** `.env` **files** (they 
 ### Frontend - `client/.env`
 
 
-| Variable       | Local                   | Production (Amplify console) |
-| -------------- | ----------------------- | ---------------------------- |
-| `VITE_API_URL` | `http://localhost:3000` | `https://oppex.duckdns.org`  |
+| Variable       | Local                   | Production                          |
+| -------------- | ----------------------- | ---------------------------------- |
+| `VITE_API_URL` | `http://localhost:3000` | *(unset — same-origin `/auth/*`)* |
 
 
-Set `VITE_API_URL` in Amplify **before** building - Vite bakes it into the bundle.
+In production the frontend is served from the same origin as the API, so `VITE_API_URL`
+is left **unset** and the build uses relative paths. The Docker build never copies `.env`
+(see `client/.dockerignore`), so this is automatic.
 
 ---
 
@@ -406,7 +419,8 @@ Gmail (recommended for Gmail recipients):
 
 ## Deployment (AWS)
 
-Step-by-step for what this project uses in production.
+The whole app runs as one Docker Compose stack on a single EC2 instance, served from
+one origin (`https://oppex.duckdns.org`).
 
 ### 1. Push code to GitHub
 
@@ -416,134 +430,99 @@ git commit -m "Oppex IAM portal"
 git push origin main
 ```
 
-Ensure `sysarch.png` is committed at the repo root (same folder as `README.md`) so the diagram renders on GitHub.
+Ensure `sysarch.png` is committed at the repo root (next to `README.md`) so the diagram renders on GitHub.
 
-### 2. Database - Neon PostgreSQL
+### 2. Database — Neon PostgreSQL
 
 1. Create a project at [neon.tech](https://neon.tech).
-2. Copy connection string into `server/.env` on EC2.
+2. Copy the connection string into `server/.env` on EC2.
 
+### 3. DNS — DuckDNS
 
+1. [duckdns.org](https://www.duckdns.org) → create a subdomain (e.g. `oppex`).
+2. Point `oppex.duckdns.org` to your EC2 public IP.
 
-### 3. Frontend - AWS Amplify
+### 4. Launch EC2
 
-1. Amplify Console → **Host web app** → connect GitHub repo.
-2. **Monorepo:** enable, **Root directory:** `client`.
-3. Build uses root `amplify.yml` (Node 22.22, `npm install`, output `build/client`).
-4. Environment variables:
-
-
-| Key                         | Value                       |
-| --------------------------- | --------------------------- |
-| `AMPLIFY_MONOREPO_APP_ROOT` | `client`                    |
-| `VITE_API_URL`              | `https://oppex.duckdns.org` |
-
-
-1. Deploy → note your `https://main.xxxxx.amplifyapp.com` URL.
-
-
-
-### 4. Backend - AWS EC2 + Docker
-
-**Launch EC2:** Ubuntu 22.04, `t2.micro`, key pair `oppex.pem`.
+Ubuntu 22.04, `t2.micro`, key pair `oppex.pem`.
 
 **Security group inbound:**
 
+| Port | Source | Purpose |
+| ---- | ------ | ------- |
+| 22 | My IP | SSH |
+| 80 | `0.0.0.0/0` | HTTP → HTTPS redirect + Let's Encrypt |
+| 443 | `0.0.0.0/0` | HTTPS (the only public app port) |
 
-| Port | Purpose               |
-| ---- | --------------------- |
-| 22   | SSH                   |
-| 80   | Caddy (Let's Encrypt) |
-| 443  | HTTPS API             |
+Ports 3000 (BFF), 8080 (Quarkus), and the frontend are internal to the Docker network — not exposed.
 
-
-Do **not** expose 8080 (Quarkus) publicly.
-
-**On EC2:**
+### 5. Install Docker on EC2
 
 ```bash
 sudo apt update
 sudo apt install -y docker.io docker-compose-v2 git
 sudo usermod -aG docker ubuntu
 # log out and back in
-
-git clone https://github.com/imdeeep/oppex.git
-cd oppex
-
-# Create server/.env and node-proxy/.env (see Environment variables section)
-nano server/.env
-nano node-proxy/.env
-
-docker compose up -d --build
-curl http://localhost:3000/health   # → {"status":"ok"}
 ```
 
-**Production** `node-proxy/.env` **on EC2:**
+### 6. Clone + configure env
+
+```bash
+git clone https://github.com/imdeeep/oppex.git
+cd oppex
+nano server/.env        # Neon + Gmail
+nano node-proxy/.env    # see below
+```
+
+`node-proxy/.env` (production):
 
 ```env
 PORT=3000
 QUARKUS_URL=http://server:8080
 SESSION_SECRET=<long-random-string>
-CLIENT_URL=https://main.xxxxx.amplifyapp.com
+CLIENT_URL=https://oppex.duckdns.org
 NODE_ENV=production
 ```
 
+`client` needs no env — the Docker build produces a same-origin bundle.
 
-
-### 5. HTTPS - DuckDNS + Caddy
-
-1. [duckdns.org](https://www.duckdns.org) → create subdomain (e.g. `oppex.duckdns.org`) → point to EC2 public IP.
-2. Install Caddy on EC2:
+### 7. Build + start the full stack
 
 ```bash
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update && sudo apt install -y caddy
+docker compose up -d --build
+docker compose ps        # caddy, frontend, node-proxy, server all Up
 ```
 
-1. `/etc/caddy/Caddyfile`:
+Caddy automatically obtains a Let's Encrypt certificate for `oppex.duckdns.org`.
 
-```caddyfile
-oppex.duckdns.org {
-    reverse_proxy localhost:3000
-}
-```
+### 8. Verify
 
 ```bash
-sudo systemctl restart caddy
 curl https://oppex.duckdns.org/health   # → {"status":"ok"}
 ```
 
+- [ ] Open `https://oppex.duckdns.org` → signup → OTP email → verify → login → portal
+- [ ] DevTools → Cookies → `oppex.sid` (first-party, `Secure`) on `oppex.duckdns.org`
+- [ ] Logout returns to login
 
+### Update / redeploy
 
-### 6. Wire frontend to API
+```bash
+cd ~/oppex
+git pull origin main
+docker compose up -d --build
+```
 
-1. Set Amplify env `VITE_API_URL=https://oppex.duckdns.org` → redeploy.
-2. Set EC2 `CLIENT_URL` to your exact Amplify URL → `docker compose up -d --force-recreate node-proxy`.
+### Containers
 
+| Service | Image / build | Exposure |
+| ------- | ------------- | -------- |
+| `caddy` | `caddy:2-alpine` | Public 80/443 |
+| `frontend` | `client/Dockerfile` (nginx) | Internal :80 |
+| `node-proxy` | `node-proxy/Dockerfile` (Node 20) | Internal :3000 |
+| `server` | `server/Dockerfile` (Quarkus/JRE 17) | Internal :8080 |
 
-
-### 7. Verify production
-
-- [ ] `curl https://oppex.duckdns.org/health` returns JSON
-- [ ] Signup → OTP email → verify → login → portal
-- [ ] DevTools → Cookies → `oppex.sid` with `Secure` + `SameSite=None`
-- [ ] Logout works
-
-
-
-### Docker files
-
-
-| File                    | Purpose                                        |
-| ----------------------- | ---------------------------------------------- |
-| `server/Dockerfile`     | Multi-stage Quarkus build → `quarkus-run.jar`  |
-| `node-proxy/Dockerfile` | Node 20 Alpine BFF                             |
-| `docker-compose.yml`    | `server` (internal) + `node-proxy` (port 3000) |
-
-
-For a real product, i will replace DuckDNS with a purchased domain (`app.mydomain.com` + `api.mydomain.com`), use AWS SES for email, and lock down EC2 to ports 22/443 only.
+For a real product: replace DuckDNS with a purchased domain, use AWS SES for email, add backups/monitoring, and keep only 22/443 open.
 
 ---
 
@@ -557,27 +536,27 @@ For a real product, i will replace DuckDNS with a purchased domain (`app.mydomai
 
 Quarkus mocks mail in dev by default. This repo sets `%dev.quarkus.mailer.mock=false`. Restart `./mvnw quarkus:dev` after mail config changes.
 
-### Amplify build fails
+### Login works but portal says Unauthorized (production)
 
-- Set `AMPLIFY_MONOREPO_APP_ROOT=client`.
-- Use Node 22.22+ (`amplify.yml` uses `nvm install 22.22.0`).
-- Use `npm install` not `npm ci` (lockfile differs macOS vs Linux).
+This was the main deployment gotcha — a **third-party cookie** being blocked by Safari.
+The fix is the single-origin setup: frontend + API both under `oppex.duckdns.org`.
+Confirm:
 
+- All requests in DevTools go to `oppex.duckdns.org` (not a second domain)
+- `CLIENT_URL=https://oppex.duckdns.org` and `NODE_ENV=production` on EC2
+- Caddy is serving HTTPS and the `oppex.sid` cookie shows as first-party
 
+### Caddy container can't bind port 80/443
 
-### Amplify login returns HTML instead of JSON
+If a host Caddy was installed earlier, stop it so the container can use the ports:
 
-Amplify cannot proxy to plain `http://IP:3000` - it requires **HTTPS**. Use DuckDNS + Caddy, then set `VITE_API_URL` to the HTTPS BFF URL.
+```bash
+sudo systemctl stop caddy && sudo systemctl disable caddy
+```
 
-### Login works locally but portal says Unauthorized in production
+### SSH times out
 
-Cross-origin cookie issue. Ensure:
-
-- `VITE_API_URL=https://oppex.duckdns.org` in Amplify
-- `CLIENT_URL=https://your.amplifyapp.com` on EC2 (exact match, no trailing slash)
-- `NODE_ENV=production` on EC2
-- Caddy running with HTTPS
-- BFF has `trust proxy` and `SameSite=None` cookies (already in this repo)
+Port 22 not open to your current IP, or the instance IP changed. Re-add SSH (source **My IP**) in the security group, and update DuckDNS if the EC2 IP changed.
 
 
 
