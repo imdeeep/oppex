@@ -26,51 +26,14 @@ applications:
           headers:
             - key: Cache-Control
               value: public, max-age=0, must-revalidate
-      # Proxy API traffic to EC2 BFF. Explicit rules (with/without trailing slash)
-      # must come BEFORE the SPA fallback or Amplify returns index.html for /auth/*.
+      # Proxy /auth/* and /health to the HTTPS BFF on DuckDNS (must be before SPA fallback).
       redirects:
-        - source: /auth/signup
-          target: http://3.85.101.177:3000/auth/signup
+        - source: /auth/<*>
           status: "200"
-        - source: /auth/signup/
-          target: http://3.85.101.177:3000/auth/signup
-          status: "200"
-        - source: /auth/login
-          target: http://3.85.101.177:3000/auth/login
-          status: "200"
-        - source: /auth/login/
-          target: http://3.85.101.177:3000/auth/login
-          status: "200"
-        - source: /auth/logout
-          target: http://3.85.101.177:3000/auth/logout
-          status: "200"
-        - source: /auth/logout/
-          target: http://3.85.101.177:3000/auth/logout
-          status: "200"
-        - source: /auth/verify
-          target: http://3.85.101.177:3000/auth/verify
-          status: "200"
-        - source: /auth/verify/
-          target: http://3.85.101.177:3000/auth/verify
-          status: "200"
-        - source: /auth/resend-code
-          target: http://3.85.101.177:3000/auth/resend-code
-          status: "200"
-        - source: /auth/resend-code/
-          target: http://3.85.101.177:3000/auth/resend-code
-          status: "200"
-        - source: /auth/me
-          target: http://3.85.101.177:3000/auth/me
-          status: "200"
-        - source: /auth/me/
-          target: http://3.85.101.177:3000/auth/me
-          status: "200"
+          target: https://oppex.duckdns.org/auth/<*>
         - source: /health
-          target: http://3.85.101.177:3000/health
           status: "200"
-        - source: /health/
-          target: http://3.85.101.177:3000/health
+          target: https://oppex.duckdns.org/health
+        - source: </^[^.]+$|\\.(?!(css|gif|ico|jpg|js|png|txt|svg|woff|woff2|ttf|map|json)$)([^.]+$)/>
           status: "200"
-        - source: /<*>
           target: /index.html
-          status: "404-200"
