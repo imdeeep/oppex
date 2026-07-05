@@ -1,15 +1,32 @@
-# OppexAI — Identity & Access Management System
+# Oppex - Identity & Access Management System
 
-A full-stack user signup, email verification, login, and session management portal built for an enterprise-style **Backend-for-Frontend (BFF)** assignment.
+A full-stack user signup, email verification, login, and session management portal built with an enterprise **Backend-for-Frontend (BFF)** pattern.
 
-The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwards business requests to a **Quarkus** backend, which owns password hashing, verification logic, and database access via **PostgreSQL**. Email verification codes are sent through **SMTP** (Gmail or Brevo).
+The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwards business requests to a **Quarkus** backend, which handles password hashing, verification logic, and database access via **PostgreSQL**. Email verification uses **6-digit OTP** codes sent through **SMTP** (Gmail).
 
 ---
+
+## Live deployment
+
+
+| Service               | URL                                          |
+| --------------------- | -------------------------------------------- |
+| **Portal (frontend)** | `https://main.d1wk531jtem0zo.amplifyapp.com` |
+| **BFF API (backend)** | `https://oppex.duckdns.org`                  |
+| **GitHub**            | `https://github.com/imdeeep/oppex`           |
+
+
+Replace the URLs above with your own if you redeploy.
+
+---
+
+
 
 ## Table of contents
 
 - [Assignment requirements](#assignment-requirements)
 - [System architecture](#system-architecture)
+- [Production architecture](#production-architecture)
 - [Project structure](#project-structure)
 - [Tech stack](#tech-stack)
 - [Prerequisites](#prerequisites)
@@ -21,9 +38,8 @@ The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwar
 - [Running tests](#running-tests)
 - [Security](#security)
 - [Email configuration](#email-configuration)
-- [Troubleshooting](#troubleshooting)
-- [Production build](#production-build)
 - [Deployment (AWS)](#deployment-aws)
+- [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -32,17 +48,17 @@ The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwar
 ## Assignment requirements
 
 
-| Requirement                               | Implementation                                          |
-| ----------------------------------------- | ------------------------------------------------------- |
-| Sign up with email + password             | React signup page → BFF → Quarkus                       |
-| Password stored as salted hash            | bcrypt via Quarkus `PasswordService`                    |
-| Email verification after signup           | 6-digit OTP emailed via SMTP, 10-minute expiry          |
-| Login with verified / unverified messages | Exact assignment copy returned from Quarkus             |
-| Logout + redirect to login                | Session destroyed in Node BFF                           |
-| Backend + frontend tests                  | JUnit (Quarkus), Vitest (React), Node test runner (BFF) |
-| Quarkus services + Node session layer     | BFF pattern as specified                                |
-| Tech stack                                | Quarkus + PostgreSQL + React + Node + Maven             |
-| AWS deployment                            | Planned — see [Deployment](#deployment-aws)             |
+| Requirement                               | Implementation                                              |
+| ----------------------------------------- | ----------------------------------------------------------- |
+| Sign up with email + password             | React signup → BFF → Quarkus                                |
+| Password stored as salted hash            | bcrypt via Quarkus `PasswordService`                        |
+| Email verification after signup           | 6-digit OTP via SMTP, 10-minute expiry                      |
+| Login with verified / unverified messages | Exact assignment copy from Quarkus                          |
+| Logout + redirect to login                | Session destroyed in Node BFF                               |
+| Backend + frontend tests                  | JUnit, Vitest, Node test runner                             |
+| Quarkus services + Node session layer     | BFF pattern as specified                                    |
+| Tech stack                                | Quarkus + PostgreSQL + React + Node + Maven                 |
+| AWS deployment                            | Amplify (frontend) + EC2 Docker (BFF + Quarkus) + Neon (DB) |
 
 
 ---
@@ -51,41 +67,83 @@ The browser talks only to a **Node.js BFF** (sessions + cookies). The BFF forwar
 
 ## System architecture
 
-Oppex system architecture
+Oppex system architecture diagram
 
-### How the layers work
+> **Note:** The diagram shows port `4000` for the BFF and a separate verification-tokens table. This implementation uses port **3000** for the BFF and stores OTP fields on the `users` table.
+
+
+
+### How the layers work (local)
 
 ```
 Browser (React)  →  Node BFF  →  Quarkus API  →  PostgreSQL
                          ↑
-                   Session cookie
-                   (oppex.sid)
+                   Session cookie (oppex.sid)
 
-Quarkus  →  SMTP  →  User inbox (verification OTP)
+Quarkus  →  SMTP  →  User inbox (6-digit OTP)
 ```
 
 
-| Layer             | Folder        | Default port | Role                                        |
-| ----------------- | ------------- | ------------ | ------------------------------------------- |
-| **Frontend**      | `client/`     | `5173`       | Login, signup, verify, portal UI            |
-| **BFF / Gateway** | `node-proxy/` | `3000`       | Sessions, cookies, CORS, proxy to Quarkus   |
-| **Backend**       | `server/`     | `8080`       | User service, bcrypt, OTP, JPA persistence  |
-| **Database**      | PostgreSQL    | `5432`       | User records (Neon, RDS, or local Postgres) |
-
-
-> **Note:** The architecture diagram may show port `4000` for the BFF. This project runs the BFF on port `3000` by default (configurable via `PORT` in `node-proxy/.env`).
+| Layer        | Folder        | Port (local) | Role                                      |
+| ------------ | ------------- | ------------ | ----------------------------------------- |
+| **Frontend** | `client/`     | `5173`       | Login, signup, verify, portal UI          |
+| **BFF**      | `node-proxy/` | `3000`       | Sessions, cookies, CORS, proxy to Quarkus |
+| **Backend**  | `server/`     | `8080`       | User service, bcrypt, OTP, JPA            |
+| **Database** | PostgreSQL    | `5432`       | Neon (cloud) or local Postgres            |
 
 
 
-### Request flow (signup example)
+
+### Request flow (signup)
 
 1. User submits email + password on the React signup page.
-2. Browser sends `POST /auth/signup` to the Node BFF with `credentials: include`.
-3. BFF forwards the request to Quarkus `POST /api/users/signup`.
-4. Quarkus hashes the password, saves the user, generates a 6-digit OTP, and sends the verification email.
-5. User enters the OTP on `/verify`; BFF proxies to Quarkus `/api/users/verify`.
-6. After verification, user logs in. BFF creates a session **only for verified users** and sets an `HttpOnly` cookie.
+2. Browser sends `POST /auth/signup` to the BFF with `credentials: include`.
+3. BFF forwards to Quarkus `POST /api/users/signup`.
+4. Quarkus hashes the password, saves the user, generates a 6-digit OTP, and sends email.
+5. User enters OTP on `/verify`; BFF proxies to Quarkus `/api/users/verify`.
+6. After verification, user logs in. BFF creates a session **only for verified users**.
 7. Protected portal routes call `GET /auth/me` to read the session.
+
+---
+
+
+
+## Production architecture
+
+```
+User browser
+    │
+    ├─► AWS Amplify          https://main.xxxxx.amplifyapp.com   (React SPA)
+    │
+    └─► DuckDNS + Caddy + EC2  https://oppex.duckdns.org          (Node BFF :3000)
+              │
+              └─► Docker: Quarkus :8080 (internal only)
+                        │
+                        ├─► Neon PostgreSQL (external)
+                        └─► Gmail SMTP
+```
+
+
+| Component     | Where              | Notes                                      |
+| ------------- | ------------------ | ------------------------------------------ |
+| Frontend      | **AWS Amplify**    | Monorepo, app root = `client/`             |
+| BFF + Quarkus | **AWS EC2**        | Docker Compose (`docker-compose.yml`)      |
+| HTTPS for API | **Caddy** on EC2   | Auto Let's Encrypt cert for DuckDNS domain |
+| Database      | **Neon**           | PostgreSQL, external - not on EC2          |
+| DNS           | **DuckDNS** (free) | Points subdomain to EC2 public IP          |
+
+
+
+
+### Why cross-origin + HTTPS in production
+
+Locally, frontend and BFF share `localhost` - cookies work with `SameSite=Lax`.
+
+In production, Amplify (`amplifyapp.com`) and the BFF (`duckdns.org`) are **different sites**. The fix:
+
+1. **HTTPS** on the BFF via Caddy (Amplify requires HTTPS targets; plain `http://IP:3000` is rejected).
+2. `VITE_API_URL=https://oppex.duckdns.org` in Amplify - browser calls BFF directly.
+3. `SameSite=None; Secure` cookies in production + `trust proxy` in Express (behind Caddy).
 
 ---
 
@@ -96,27 +154,12 @@ Quarkus  →  SMTP  →  User inbox (verification OTP)
 ```
 oppex/
 ├── client/                 # React frontend (React Router 8 + Vite + Tailwind)
-│   ├── app/
-│   │   ├── routes/         # login, signup, verify, portal, …
-│   │   ├── components/     # Input, AuthLayout, GuestGuard, …
-│   │   └── lib/api.ts      # BFF API client
-│   └── test/               # Vitest tests
 ├── node-proxy/             # Node.js BFF (Express + express-session)
-│   ├── src/
-│   │   ├── routes/         # /auth/* handlers
-│   │   ├── clients/        # Quarkus HTTP client
-│   │   └── middleware/     # session + requireAuth
-│   └── test/               # Node integration tests
 ├── server/                 # Quarkus backend (Maven)
-│   └── src/
-│       ├── main/java/com/oppex/
-│       │   ├── resource/   # REST endpoints
-│       │   ├── service/    # business logic
-│       │   ├── entity/     # JPA User model
-│       │   └── repository/
-│       └── test/java/      # JUnit tests
+├── docker-compose.yml      # EC2: server + node-proxy containers
+├── amplify.yml             # Amplify build spec (monorepo, appRoot: client)
+├── sysarch.png             # Architecture diagram (referenced above)
 ├── docs/context.md         # Extended architecture notes
-├── sysarch.png             # System architecture diagram
 └── README.md
 ```
 
@@ -127,15 +170,15 @@ oppex/
 ## Tech stack
 
 
-| Area     | Technology                                                 |
-| -------- | ---------------------------------------------------------- |
-| Frontend | React 19, React Router 8, TypeScript, Tailwind CSS 4, Vite |
-| BFF      | Node.js, Express, express-session, CORS                    |
-| Backend  | Quarkus 3.37, Java 17, Hibernate ORM, Panache              |
-| Database | PostgreSQL (Neon / AWS RDS / local)                        |
-| Email    | Quarkus Mailer (SMTP - Gmail )                             |
-| Build    | Maven (`./mvnw`), npm                                      |
-| Tests    | JUnit 5, RestAssured, Vitest, Node `--test`                |
+| Area       | Technology                                                 |
+| ---------- | ---------------------------------------------------------- |
+| Frontend   | React 19, React Router 8, TypeScript, Tailwind CSS 4, Vite |
+| BFF        | Node.js, Express, express-session, CORS                    |
+| Backend    | Quarkus 3.37, Java 17, Hibernate ORM, Panache              |
+| Database   | PostgreSQL (Neon)                                          |
+| Email      | Quarkus Mailer + Gmail SMTP                                |
+| Deployment | AWS Amplify, EC2, Docker, Caddy, DuckDNS                   |
+| Tests      | JUnit 5, Vitest, Node `--test`                             |
 
 
 ---
@@ -144,19 +187,18 @@ oppex/
 
 ## Prerequisites
 
-Install the following before running locally:
+
+| Tool                    | Version                         | Used by             |
+| ----------------------- | ------------------------------- | ------------------- |
+| Java JDK                | 17+                             | Quarkus             |
+| Node.js                 | 18+ (22.22+ for Amplify builds) | BFF + React         |
+| npm                     | 9+                              | BFF + React         |
+| PostgreSQL              | 14+ or Neon                     | User storage        |
+| Gmail App Password      | -                               | Verification emails |
+| Docker + Docker Compose | -                               | EC2 deployment      |
 
 
-| Tool                 | Version                     | Used by             |
-| -------------------- | --------------------------- | ------------------- |
-| **Java JDK**         | 17+                         | Quarkus backend     |
-| **Node.js**          | 18+ recommended             | BFF + React         |
-| **npm**              | 9+                          | BFF + React         |
-| **PostgreSQL**       | 14+ (or Neon cloud)         | User storage        |
-| **SMTP credentials** | Gmail App Password or Brevo | Verification emails |
-
-
-Maven is bundled via `./mvnw` in `server/` — no global Maven install required.
+Maven is bundled via `./mvnw` in `server/`.
 
 ---
 
@@ -164,64 +206,48 @@ Maven is bundled via `./mvnw` in `server/` — no global Maven install required.
 
 ## Environment variables
 
-Each service has its own `.env` file. Copy from the `.env.example` in each folder.
+Copy from each folder's `.env.example`. **Never commit** `.env` **files** (they are gitignored).
 
-### 1. Backend — `server/.env`
-
-Create from `server/.env.example`:
-
-```bash
-cp server/.env.example server/.env
-```
+### Backend - `server/.env`
 
 
-| Variable        | Description                    | Example                                     |
-| --------------- | ------------------------------ | ------------------------------------------- |
-| `DB_USERNAME`   | PostgreSQL username            | `neondb_owner`                              |
-| `DB_PASSWORD`   | PostgreSQL password            | `your_password`                             |
-| `DB_JDBC_URL`   | JDBC connection string         | `jdbc:postgresql://host/db?sslmode=require` |
-| `MAIL_FROM`     | Sender address shown in emails | `you@gmail.com`                             |
-| `MAIL_HOST`     | SMTP host                      | `smtp.gmail.com`                            |
-| `MAIL_PORT`     | SMTP port                      | `587`                                       |
-| `MAIL_USERNAME` | SMTP login                     | `you@gmail.com`                             |
-| `MAIL_PASSWORD` | SMTP password / app password   | `xxxx xxxx xxxx xxxx`                       |
+| Variable        | Description                                          |
+| --------------- | ---------------------------------------------------- |
+| `DB_USERNAME`   | Neon PostgreSQL username                             |
+| `DB_PASSWORD`   | Neon password                                        |
+| `DB_JDBC_URL`   | `jdbc:postgresql://...neon.tech/...?sslmode=require` |
+| `MAIL_FROM`     | Gmail sender address                                 |
+| `MAIL_HOST`     | `smtp.gmail.com`                                     |
+| `MAIL_PORT`     | `587`                                                |
+| `MAIL_USERNAME` | Gmail address                                        |
+| `MAIL_PASSWORD` | Gmail app password                                   |
 
 
-Quarkus loads these automatically in dev mode when `.env` is present in `server/`.
-
-### 2. BFF — `node-proxy/.env`
-
-Create from `node-proxy/.env.example`:
-
-```bash
-cp node-proxy/.env.example node-proxy/.env
-```
 
 
-| Variable         | Description                                              | Default                 |
-| ---------------- | -------------------------------------------------------- | ----------------------- |
-| `PORT`           | BFF listen port                                          | `3000`                  |
-| `QUARKUS_URL`    | Quarkus base URL                                         | `http://localhost:8080` |
-| `SESSION_SECRET` | Cookie signing secret (use a long random string in prod) | —                       |
-| `CLIENT_URL`     | Allowed frontend origin(s), comma-separated              | `http://localhost:5173` |
-| `NODE_ENV`       | `development` or `production`                            | `development`           |
+### BFF - `node-proxy/.env`
 
 
-In production, set `NODE_ENV=production` so session cookies use the `Secure` flag (HTTPS required).
-
-### 3. Frontend — `client/.env`
-
-Create from `client/.env.example`:
-
-```bash
-cp client/.env.example client/.env
-```
+| Variable         | Local                   | Production (EC2)                    |
+| ---------------- | ----------------------- | ----------------------------------- |
+| `PORT`           | `3000`                  | `3000`                              |
+| `QUARKUS_URL`    | `http://localhost:8080` | `http://server:8080`                |
+| `SESSION_SECRET` | any dev string          | long random string (32+ chars)      |
+| `CLIENT_URL`     | `http://localhost:5173` | `https://main.xxxxx.amplifyapp.com` |
+| `NODE_ENV`       | `development`           | `production`                        |
 
 
-| Variable       | Description       | Default                 |
-| -------------- | ----------------- | ----------------------- |
-| `VITE_API_URL` | Node BFF base URL | `http://localhost:3000` |
 
+
+### Frontend - `client/.env`
+
+
+| Variable       | Local                   | Production (Amplify console) |
+| -------------- | ----------------------- | ---------------------------- |
+| `VITE_API_URL` | `http://localhost:3000` | `https://oppex.duckdns.org`  |
+
+
+Set `VITE_API_URL` in Amplify **before** building - Vite bakes it into the bundle.
 
 ---
 
@@ -229,76 +255,26 @@ cp client/.env.example client/.env
 
 ## Setup & run (local)
 
-You need **three terminals** — one per service. Start them in this order.
-
-### Step 1 — Install dependencies
+Three terminals, in this order:
 
 ```bash
-# BFF
-cd node-proxy && npm install
+# Terminal 1 - Quarkus
+cd server && ./mvnw quarkus:dev
 
-# Frontend
-cd ../client && npm install
+# Terminal 2 - BFF
+cd node-proxy && npm run dev
+
+# Terminal 3 - Frontend
+cd client && npm run dev
 ```
 
-The Quarkus backend uses the Maven wrapper — no `npm install` needed there.
+Open [http://localhost:5173](http://localhost:5173).
 
-### Step 2 — Configure environment files
+### Local checklist
 
-1. Fill in `server/.env` with your PostgreSQL and SMTP credentials.
-2. Copy and adjust `node-proxy/.env` (at minimum set `SESSION_SECRET`).
-3. Copy `client/.env` (default `VITE_API_URL=http://localhost:3000` is fine for local dev).
-
-
-
-### Step 3 — Start Quarkus (Terminal 1)
-
-```bash
-cd server
-./mvnw quarkus:dev
-```
-
-Wait until you see:
-
-```
-Listening on: http://localhost:8080
-Mail config loaded — host=... port=... username=... from=...
-```
-
-Health check: [http://localhost:8080/q/health](http://localhost:8080/q/health)
-
-### Step 4 — Start the BFF (Terminal 2)
-
-```bash
-cd node-proxy
-npm run dev
-```
-
-You should see:
-
-```
-BFF listening on http://localhost:3000
-Proxying to Quarkus at http://localhost:8080
-```
-
-Health check: [http://localhost:3000/health](http://localhost:3000/health)
-
-### Step 5 — Start the frontend (Terminal 3)
-
-```bash
-cd client
-npm run dev
-```
-
-Open the app: [http://localhost:5173](http://localhost:5173)
-
-### Quick verification checklist
-
-- [ ] Sign up with a new email → redirected to `/verify`
-- [ ] 6-digit OTP arrives in inbox (check spam/promotions if needed)
-- [ ] Enter OTP → redirected to login with success message
-- [ ] Login → portal opens for verified users
-- [ ] Logout → returned to login; `/portal` redirects away
+- [ ] Sign up → 6-digit OTP email arrives
+- [ ] Verify → login → portal (verified users only)
+- [ ] Logout → `/portal` redirects to login
 
 ---
 
@@ -308,37 +284,21 @@ Open the app: [http://localhost:5173](http://localhost:5173)
 
 
 
-### Sign up
-
-1. `/signup` — enter email + password (min 8 characters).
-2. Backend creates account with `is_verified = false`.
-3. 6-digit OTP emailed; user lands on `/verify?email=...`.
+### Login messages (assignment copy)
 
 
-
-### Email verification
-
-1. User enters the 6-digit code (paste supported).
-2. OTP expires after **10 minutes**; use **Resend code** if needed.
-3. On success → redirect to `/login?verified=true`.
-
-
-
-### Login
-
-
-| State      | Message shown                                          | Session created? | Portal access? |
-| ---------- | ------------------------------------------------------ | ---------------- | -------------- |
-| Unverified | *You need to validate your email to access the portal* | No               | No             |
-| Verified   | *Your email is validated. You can access the portal*   | Yes              | Yes            |
+| State      | Message                                                | Session | Portal |
+| ---------- | ------------------------------------------------------ | ------- | ------ |
+| Unverified | *You need to validate your email to access the portal* | No      | No     |
+| Verified   | *Your email is validated. You can access the portal*   | Yes     | Yes    |
 
 
 
 
-### Logout
+### OTP
 
-- Destroys server session and clears `oppex.sid` cookie.
-- Visiting `/` or `/portal` after logout redirects to login.
+- **6-digit numeric** code, expires in **10 minutes**
+- Resend available on `/verify`
 
 ---
 
@@ -346,34 +306,33 @@ Open the app: [http://localhost:5173](http://localhost:5173)
 
 ## API reference
 
-The React app calls the **BFF only**. Quarkus endpoints are internal (BFF → Quarkus).
-
-### BFF — `http://localhost:3000`
 
 
-| Method | Path                | Auth    | Description                            |
-| ------ | ------------------- | ------- | -------------------------------------- |
-| `GET`  | `/health`           | —       | Health check                           |
-| `POST` | `/auth/signup`      | —       | Register `{ email, password }`         |
-| `POST` | `/auth/verify`      | —       | Verify `{ email, otp }`                |
-| `POST` | `/auth/resend-code` | —       | Resend OTP `{ email }`                 |
-| `POST` | `/auth/login`       | —       | Login `{ email, password }`            |
-| `POST` | `/auth/logout`      | Session | Destroy session                        |
-| `GET`  | `/auth/me`          | Session | Current user `{ id, email, verified }` |
+### BFF (browser-facing)
 
 
-All auth requests from the browser must include `credentials: "include"` so the session cookie is sent.
+| Method | Path                | Auth    | Description  |
+| ------ | ------------------- | ------- | ------------ |
+| `GET`  | `/health`           | -       | Health check |
+| `POST` | `/auth/signup`      | -       | Register     |
+| `POST` | `/auth/verify`      | -       | Verify OTP   |
+| `POST` | `/auth/resend-code` | -       | Resend OTP   |
+| `POST` | `/auth/login`       | -       | Login        |
+| `POST` | `/auth/logout`      | Session | Logout       |
+| `GET`  | `/auth/me`          | Session | Current user |
 
-### Quarkus — `http://localhost:8080` (internal)
+
+All browser requests use `credentials: include`.
+
+### Quarkus (internal, BFF only)
 
 
-| Method | Path                     | Description                          |
-| ------ | ------------------------ | ------------------------------------ |
-| `POST` | `/api/users/signup`      | Create user + send OTP               |
-| `POST` | `/api/users/verify`      | Validate OTP                         |
-| `POST` | `/api/users/resend-code` | Generate + send new OTP              |
-| `POST` | `/api/users/login`       | Authenticate + return status message |
-| `GET`  | `/q/health`              | Health check                         |
+| Method | Path                     |
+| ------ | ------------------------ |
+| `POST` | `/api/users/signup`      |
+| `POST` | `/api/users/verify`      |
+| `POST` | `/api/users/resend-code` |
+| `POST` | `/api/users/login`       |
 
 
 ---
@@ -385,18 +344,16 @@ All auth requests from the browser must include `credentials: "include"` so the 
 Table: `users`
 
 
-| Column               | Type        | Notes                           |
-| -------------------- | ----------- | ------------------------------- |
-| `id`                 | BIGINT (PK) | Auto-increment                  |
-| `email`              | VARCHAR     | Unique, normalized to lowercase |
-| `password_hash`      | VARCHAR     | bcrypt hash (salt embedded)     |
-| `is_verified`        | BOOLEAN     | Default `false`                 |
-| `verification_token` | VARCHAR     | 6-digit OTP while pending       |
-| `otp_expires_at`     | TIMESTAMP   | OTP expiry                      |
-| `created_at`         | TIMESTAMP   | Account creation time           |
+| Column               | Notes             |
+| -------------------- | ----------------- |
+| `id`                 | Primary key       |
+| `email`              | Unique, lowercase |
+| `password_hash`      | bcrypt            |
+| `is_verified`        | boolean           |
+| `verification_token` | 6-digit OTP       |
+| `otp_expires_at`     | expiry timestamp  |
+| `created_at`         | account creation  |
 
-
-Hibernate manages schema updates in dev via `quarkus.hibernate-orm.schema-management.strategy=update`.
 
 ---
 
@@ -404,31 +361,10 @@ Hibernate manages schema updates in dev via `quarkus.hibernate-orm.schema-manage
 
 ## Running tests
 
-
-
-### Backend (Quarkus)
-
 ```bash
-cd server
-./mvnw test
-```
-
-Uses in-memory **H2** for tests — no live PostgreSQL required. Covers password hashing, user service, and REST integration.
-
-### BFF (Node)
-
-```bash
-cd node-proxy
-npm test
-```
-
-
-
-### Frontend (React)
-
-```bash
-cd client
-npm test
+cd server && ./mvnw test
+cd node-proxy && npm test
+cd client && npm test
 ```
 
 ---
@@ -438,18 +374,16 @@ npm test
 ## Security
 
 
-| Feature                | Where                                              |
-| ---------------------- | -------------------------------------------------- |
-| Password hashing       | Quarkus — bcrypt (`PasswordService`)               |
-| Session management     | Node BFF — `express-session`                       |
-| Cookie flags           | `HttpOnly`, `SameSite=lax`, `Secure` in production |
-| Verified-only sessions | BFF only sets session when `verified: true`        |
-| CORS                   | BFF allows `CLIENT_URL` origins only               |
-| Email uniqueness       | PostgreSQL unique constraint on `email`            |
-| OTP expiry             | 10-minute TTL, cleared after successful verify     |
+| Feature                   | Implementation                                    |
+| ------------------------- | ------------------------------------------------- |
+| Password hashing          | bcrypt (Quarkus)                                  |
+| Sessions                  | `express-session`, cookie `oppex.sid`             |
+| Cookie flags (local)      | `HttpOnly`, `SameSite=Lax`                        |
+| Cookie flags (production) | `HttpOnly`, `SameSite=None`, `Secure`             |
+| Verified-only sessions    | BFF sets session only when `verified: true`       |
+| CORS                      | `CLIENT_URL` allowlist                            |
+| Quarkus not public        | Docker `expose: 8080` only - no host port mapping |
 
-
-The browser never receives the password hash or talks to Quarkus directly.
 
 ---
 
@@ -457,39 +391,158 @@ The browser never receives the password hash or talks to Quarkus directly.
 
 ## Email configuration
 
-Verification emails are sent by Quarkus through SMTP.
+Gmail (recommended for Gmail recipients):
 
-### Option A — Gmail (recommended for Gmail recipients)
-
-1. Enable 2FA on your Google account.
+1. Enable 2FA on Google account.
 2. Create an [App Password](https://myaccount.google.com/apppasswords).
-3. Set in `server/.env`:
+3. Set `MAIL_*` in `server/.env`.
+
+**Dev mode:** `%dev.quarkus.mailer.mock=false` in `application.properties` forces real SMTP in `quarkus:dev` (Quarkus mocks mail by default in dev).
+
+---
+
+
+
+## Deployment (AWS)
+
+Step-by-step for what this project uses in production.
+
+### 1. Push code to GitHub
+
+```bash
+git add .
+git commit -m "Oppex IAM portal"
+git push origin main
+```
+
+Ensure `sysarch.png` is committed at the repo root (same folder as `README.md`) so the diagram renders on GitHub.
+
+### 2. Database - Neon PostgreSQL
+
+1. Create a project at [neon.tech](https://neon.tech).
+2. Copy connection string into `server/.env` on EC2.
+
+
+
+### 3. Frontend - AWS Amplify
+
+1. Amplify Console → **Host web app** → connect GitHub repo.
+2. **Monorepo:** enable, **Root directory:** `client`.
+3. Build uses root `amplify.yml` (Node 22.22, `npm install`, output `build/client`).
+4. Environment variables:
+
+
+| Key                         | Value                       |
+| --------------------------- | --------------------------- |
+| `AMPLIFY_MONOREPO_APP_ROOT` | `client`                    |
+| `VITE_API_URL`              | `https://oppex.duckdns.org` |
+
+
+1. Deploy → note your `https://main.xxxxx.amplifyapp.com` URL.
+
+
+
+### 4. Backend - AWS EC2 + Docker
+
+**Launch EC2:** Ubuntu 22.04, `t2.micro`, key pair `oppex.pem`.
+
+**Security group inbound:**
+
+
+| Port | Purpose               |
+| ---- | --------------------- |
+| 22   | SSH                   |
+| 80   | Caddy (Let's Encrypt) |
+| 443  | HTTPS API             |
+
+
+Do **not** expose 8080 (Quarkus) publicly.
+
+**On EC2:**
+
+```bash
+sudo apt update
+sudo apt install -y docker.io docker-compose-v2 git
+sudo usermod -aG docker ubuntu
+# log out and back in
+
+git clone https://github.com/imdeeep/oppex.git
+cd oppex
+
+# Create server/.env and node-proxy/.env (see Environment variables section)
+nano server/.env
+nano node-proxy/.env
+
+docker compose up -d --build
+curl http://localhost:3000/health   # → {"status":"ok"}
+```
+
+**Production** `node-proxy/.env` **on EC2:**
 
 ```env
-MAIL_HOST=smtp.gmail.com
-MAIL_PORT=587
-MAIL_USERNAME=your-account@gmail.com
-MAIL_PASSWORD=your-16-char-app-password
-MAIL_FROM=your-account@gmail.com
+PORT=3000
+QUARKUS_URL=http://server:8080
+SESSION_SECRET=<long-random-string>
+CLIENT_URL=https://main.xxxxx.amplifyapp.com
+NODE_ENV=production
 ```
 
 
 
-### Option B — Brevo (Sendinblue)
+### 5. HTTPS - DuckDNS + Caddy
 
-See comments in `server/.env.example`. Use the Brevo **SMTP login** as `MAIL_USERNAME`, not your personal email.
+1. [duckdns.org](https://www.duckdns.org) → create subdomain (e.g. `oppex.duckdns.org`) → point to EC2 public IP.
+2. Install Caddy on EC2:
 
-### Dev mode: real email delivery
-
-Quarkus mocks the mailer by default in dev mode (logs only, no real send). This project sets:
-
-```properties
-%dev.quarkus.mailer.mock=false
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update && sudo apt install -y caddy
 ```
 
-in `server/src/main/resources/application.properties` so local dev sends real emails.
+1. `/etc/caddy/Caddyfile`:
 
-In dev, OTP codes are also printed in the Quarkus terminal when `app.mailer.log-code-in-dev=true`.
+```caddyfile
+oppex.duckdns.org {
+    reverse_proxy localhost:3000
+}
+```
+
+```bash
+sudo systemctl restart caddy
+curl https://oppex.duckdns.org/health   # → {"status":"ok"}
+```
+
+
+
+### 6. Wire frontend to API
+
+1. Set Amplify env `VITE_API_URL=https://oppex.duckdns.org` → redeploy.
+2. Set EC2 `CLIENT_URL` to your exact Amplify URL → `docker compose up -d --force-recreate node-proxy`.
+
+
+
+### 7. Verify production
+
+- [ ] `curl https://oppex.duckdns.org/health` returns JSON
+- [ ] Signup → OTP email → verify → login → portal
+- [ ] DevTools → Cookies → `oppex.sid` with `Secure` + `SameSite=None`
+- [ ] Logout works
+
+
+
+### Docker files
+
+
+| File                    | Purpose                                        |
+| ----------------------- | ---------------------------------------------- |
+| `server/Dockerfile`     | Multi-stage Quarkus build → `quarkus-run.jar`  |
+| `node-proxy/Dockerfile` | Node 20 Alpine BFF                             |
+| `docker-compose.yml`    | `server` (internal) + `node-proxy` (port 3000) |
+
+
+For a real product, i will replace DuckDNS with a purchased domain (`app.mydomain.com` + `api.mydomain.com`), use AWS SES for email, and lock down EC2 to ports 22/443 only.
 
 ---
 
@@ -499,95 +552,43 @@ In dev, OTP codes are also printed in the Quarkus terminal when `app.mailer.log-
 
 
 
-### Signup works but no email arrives
+### No verification email in local dev
 
-- Confirm Quarkus logs show `[mail] START` and `[mail] COMPLETED` (not just mock mailer output).
-- Check spam/promotions in Gmail.
-- Verify `MAIL_*` values in `server/.env` — wrong app password is the most common cause.
-- Restart `./mvnw quarkus:dev` after changing mail config.
+Quarkus mocks mail in dev by default. This repo sets `%dev.quarkus.mailer.mock=false`. Restart `./mvnw quarkus:dev` after mail config changes.
 
+### Amplify build fails
 
-
-### Mock mailer still active
-
-If logs show `quarkus-mailer ... text body: ... html body: <empty>` with the full email body printed, the mock mailer is active. Ensure `%dev.quarkus.mailer.mock=false` is set and restart Quarkus.
-
-### CORS / cookie errors in browser
-
-- `CLIENT_URL` in `node-proxy/.env` must match the frontend origin exactly (`http://localhost:5173`).
-- `VITE_API_URL` in `client/.env` must point to the BFF (`http://localhost:3000`).
-- Frontend fetch calls use `credentials: "include"`.
+- Set `AMPLIFY_MONOREPO_APP_ROOT=client`.
+- Use Node 22.22+ (`amplify.yml` uses `nvm install 22.22.0`).
+- Use `npm install` not `npm ci` (lockfile differs macOS vs Linux).
 
 
 
-### Login succeeds but portal redirects to login
+### Amplify login returns HTML instead of JSON
 
-Only **verified** users get a session. Complete email verification first.
+Amplify cannot proxy to plain `http://IP:3000` - it requires **HTTPS**. Use DuckDNS + Caddy, then set `VITE_API_URL` to the HTTPS BFF URL.
 
-### Database connection failed
+### Login works locally but portal says Unauthorized in production
 
-- Check `DB_JDBC_URL`, `DB_USERNAME`, and `DB_PASSWORD` in `server/.env`.
-- For Neon, ensure `?sslmode=require` is in the JDBC URL.
+Cross-origin cookie issue. Ensure:
 
----
-
-
-
-## Production build
-
+- `VITE_API_URL=https://oppex.duckdns.org` in Amplify
+- `CLIENT_URL=https://your.amplifyapp.com` on EC2 (exact match, no trailing slash)
+- `NODE_ENV=production` on EC2
+- Caddy running with HTTPS
+- BFF has `trust proxy` and `SameSite=None` cookies (already in this repo)
 
 
-### Frontend
+
+### `git pull` blocked on EC2
 
 ```bash
-cd client
-npm run build
-npm start    # serves built app (default port from react-router-serve)
+git checkout -- .
+git pull origin main
 ```
 
-Set `VITE_API_URL` to your production BFF URL **before** building.
+Never edit tracked files on EC2 - only `.env` files (gitignored).
 
-### BFF
+### Quarkus not reachable on port 8080 from browser
 
-```bash
-cd node-proxy
-NODE_ENV=production npm start
-```
-
-Set `SESSION_SECRET`, `CLIENT_URL`, and `QUARKUS_URL` for production.
-
-### Backend
-
-```bash
-cd server
-./mvnw package -DskipTests
-java -jar target/quarkus-app/quarkus-run.jar
-```
-
-Or run the packaged app with production env vars exported.
-
----
-
-
-
-## Deployment (AWS)
-
-Target deployment (per assignment): **AWS EC2 free tier** with all services on one VM:
-
-
-| Service                  | Port                          |
-| ------------------------ | ----------------------------- |
-| React (static or served) | `80` / `443`                  |
-| Node BFF                 | `3000`                        |
-| Quarkus                  | `8080`                        |
-| PostgreSQL               | `5432` (RDS or external Neon) |
-
-
-Recommended additions for production:
-
-- HTTPS reverse proxy (Nginx or Caddy)
-- Strong `SESSION_SECRET`
-- AWS SES or verified SMTP for email
-- Environment variables via EC2 user data or parameter store
-- Security group rules: expose only 80/443 publicly; keep 8080 and 5432 internal
-
+Expected. Quarkus is internal to Docker. Test via BFF: `curl http://localhost:3000/health` or `curl https://oppex.duckdns.org/health`.
